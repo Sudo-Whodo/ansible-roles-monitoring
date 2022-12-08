@@ -1,4 +1,4 @@
-#ansible-playbook -i ansible/linode.yml anisble/setup-node.yml -u envo
+#ansible-playbook -i IP.ADDRESS setup-node.yml -u root
 ---
   - hosts: "*"
     become: true
