@@ -1,0 +1,9 @@
+---
+# handlers file for roles/prometheus
+- name: Reload and enable the service
+  ansible.builtin.systemd:
+    daemon_reload: yes
+    state: restarted
+    name: prometheus.service
+    enabled: yes
+

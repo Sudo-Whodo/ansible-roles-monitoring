@@ -1,0 +1,9 @@
+#ansible-playbook -i ansible/linode.yml anisble/setup-node.yml -u envo
+---
+  - hosts: "*"
+    become: true
+    roles:
+      - {role: ansible-roles/roles/prometheus, prometheus_passwd: "You_WiLL_NeEd_to_uPdaTe_tHis!!"}
+      -  role: ansible-roles/roles/node_exporter
+
+

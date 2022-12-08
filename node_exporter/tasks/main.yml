@@ -1,0 +1,68 @@
+---
+# tasks file for roles/node_exporter
+        - name: Creating node_exporter Groups
+          group:
+            name: 'node_exporter'
+
+        - name: Creating node_exporter user
+          user:
+            name: 'node_exporter'
+            shell: /sbin/nologin
+            comment: "Nologin User"
+            state: present
+            group: 'node_exporter'
+
+#Gets the node_exporter binary
+        - block:
+            - name: Determine latest GitHub release (local)
+              become: false
+              uri:
+                url: "https://api.github.com/repos/prometheus/node_exporter/releases/latest"
+                body_format: json
+              register: _github_release
+              until: _github_release.status == 200
+              retries: 5
+              delegate_to: localhost
+
+            - name: Set node_exporter_version
+              set_fact:
+                node_exporter_version: "{{ _github_release.json.tag_name
+                  | regex_replace('^v?(.*)$', '\\1') }}"
+              when: (node_exporter_version is not defined) or (node_exporter_version == 'latest')
+
+        - name: Download and verify SHA256 checksum
+          become: false
+          get_url:
+            url: "https://github.com/prometheus/node_exporter/releases/download/v{{ node_exporter_version }}/node_exporter-{{ node_exporter_version }}.{{ ansible_system | lower }}-amd64.tar.gz"
+            dest: "/tmp/prometheus.tar.gz"
+            checksum: "sha256:https://github.com/prometheus/node_exporter/releases/download/v{{ node_exporter_version }}/sha256sums.txt"
+          register: ziped_node_exporter
+    
+#unzip the prometheus binary
+        - name: unzip the node_exporter binary
+          unarchive:
+            src: "{{ziped_node_exporter.dest}}"
+            dest: /tmp/
+            remote_src: yes
+          register: node_exporter_unzip
+
+#Copy the Binary
+        - name: Copy node_exporter binary
+          ansible.builtin.copy:
+            src: "{{node_exporter_unzip.dest}}/node_exporter-{{ node_exporter_version }}.{{ ansible_system | lower }}-amd64/node_exporter"
+            dest: /usr/local/bin/
+            owner: 'node_exporter'
+            group: 'node_exporter'
+            remote_src: 'yes'
+            mode: '+x'
+          notify: Restart and enable node_exporter
+
+#Copy the config file for node_exporter
+        - name: Copy node_exporter.service onto the server
+          ansible.builtin.copy:
+            src: ../files/node_exporter.service
+            dest: /etc/systemd/system/node_exporter.service
+            owner: root
+            group: root
+            mode: '0644'
+          notify: Restart and enable node_exporter

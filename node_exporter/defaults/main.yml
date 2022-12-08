@@ -1,0 +1,3 @@
+---
+# defaults file for roles/node_exporter
+  node_exporter_user: "node_exporter"

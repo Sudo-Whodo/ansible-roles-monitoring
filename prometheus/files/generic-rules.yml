@@ -1,0 +1,48 @@
+ # Alert for any instance that is unreachable for >5 minutes.
+  - alert: Offline
+    expr: up == 0
+    for: 5m
+    labels:
+      severity: page
+    annotations:
+      summary: "{{ $labels.instance }}: Offline"
+      description: "{{ $labels.job }} / {{ $labels.instance }} has been unreachable for more than 5 minute."
+
+  - alert: root Disk Space LOW
+    expr: 100 - ((node_filesystem_avail_bytes{mountpoint="/",fstype!="rootfs"} * 100) / node_filesystem_size_bytes{mountpoint="/",fstype!="rootfs"}) >= 90
+    for: 5m
+    labels:
+      severity: page
+    annotations:
+      summary: "Root Disk for {{ $labels.instance }} over 90%"
+      description: "{{ $labels.instance }} root disk has become 90% full."
+
+  - alert: CPU usage
+    expr: (sum by (mode)(rate(node_cpu_seconds_total{mode='idle'}[60s])) * 100) < 10
+    for: 5m
+    labels:
+      severity: page
+    annotations:
+      summary: "CPU 95% usage {{ $labels.instance }}"
+      description: "{{ $labels.instance }} CPU has been over 90% used for the last 5 minutes."
+
+#100 - (100 - ((rate(node_memory_MemAvailable_bytes[5m]) - rate(node_memory_Active_bytes[5m])) / rate(node_memory_Active_bytes[5m])))
+  - alert: Memory usage
+    expr: 100 - (100 - ((node_memory_MemAvailable_bytes - node_memory_Active_bytes) / node_memory_Active_bytes)) > 90
+    for: 5m
+    labels:
+      severity: page
+    annotations:
+      summary: "Memory 90% usage {{ $labels.instance }}"
+      description: "{{ $labels.instance }} Memory has been over 90% used for the last 5 minutes."
+
+#100 - (100 - ((rate(node_memory_MemAvailable_bytes[5m]) - rate(node_memory_Active_bytes[5m])) / rate(node_memory_Active_bytes[5m])))
+#This might fire randomly :^()
+  - alert: Received network packets
+    expr: (rate(node_network_receive_packets_total[5m])/ rate(node_network_receive_packets_total[5m] offset 5m)) > 10
+    for: 5m
+    labels:
+      severity: page
+    annotations:
+      summary: "Network traffic has jumped 10x in usage {{ $labels.instance }}"
+      description: "{{ $labels.instance }} The number of received network packets has jumped 10x from what it was 5 min ago."

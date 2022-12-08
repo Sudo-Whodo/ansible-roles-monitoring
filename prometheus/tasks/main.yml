@@ -1,0 +1,197 @@
+---
+# tasks file for roles/prometheus
+  - name: create prometheus group
+    group:
+      name: {{ prometheus_user }}
+    become: true
+
+  - name: create prometheus account
+    user:
+      name: {{ prometheus_user }}
+      shell: /sbin/nologin
+      comment: "Nologin User"
+      state: present 
+      group: {{ prometheus_user }}
+
+#Creates the folders and sets permission to prometheus
+  - name: Create /etc/prometheus if it does not exist
+    ansible.builtin.file:
+      path: /etc/prometheus
+      state: directory
+      owner: {{ prometheus_user }}
+      group: {{ prometheus_user }}
+      mode: '0755'
+
+  - name: Create /var/lib/prometheus if it does not exist
+    ansible.builtin.file:
+      path: /var/lib/prometheus
+      state: directory
+      owner: {{ prometheus_user }}
+      group: {{ prometheus_user }}
+      mode: '0755'
+
+  - block:
+      - name: Determine latest GitHub release (local)
+        become: false
+        uri:
+          url: "https://api.github.com/repos/prometheus/prometheus/releases/latest"
+          body_format: json
+        register: _github_release
+        until: _github_release.status == 200
+        retries: 5
+        delegate_to: localhost
+
+      - name: Set prometheus_version
+        set_fact:
+          prometheus_version: "{{ _github_release.json.tag_name
+            | regex_replace('^v?(.*)$', '\\1') }}"
+        when: (prometheus_version is not defined) or (prometheus_version == 'latest')
+
+  - name: Download and verify SHA256 checksum
+    become: false
+    get_url:
+      url: "https://github.com/prometheus/prometheus/releases/download/v{{ prometheus_version }}/prometheus-{{ prometheus_version }}.{{ ansible_system | lower }}-amd64.tar.gz"
+      dest: "/tmp/prometheus.tar.gz"
+      checksum: "sha256:https://github.com/prometheus/prometheus/releases/download/v{{ prometheus_version }}/sha256sums.txt"
+    register: ziped_prometheus_binary
+    notify: cleanup /tmp/prometheus.tar.gz
+
+#unzip the prometheus binary
+  - name: unzip the prometheus binary
+    unarchive:
+      src: "{{ ziped_prometheus_binary.dest }}"
+      remote_src: 'yes'
+      dest: /tmp/
+    register: unziped_prometheus_binary
+
+#Copy the Binary's
+  - name: Copy prometheus binary
+    ansible.builtin.copy:
+      src: "{{ unziped_prometheus_binary.dest }}/prometheus-{{ prometheus_version }}.{{ ansible_system | lower }}-amd64/prometheus"
+      remote_src: 'yes'
+      dest: /usr/local/bin/
+      owner: {{ prometheus_user }}
+      group: {{ prometheus_user }}
+      mode: '755'
+
+  - name: Copy promtool binary
+    ansible.builtin.copy:
+      src: "{{ unziped_prometheus_binary.dest }}/prometheus-{{ prometheus_version }}.{{ ansible_system | lower }}-amd64/promtool"
+      remote_src: 'yes'
+      dest: /usr/local/bin/
+      owner: {{ prometheus_user }}
+      group: {{ prometheus_user }}
+      mode: '755'
+
+#Copy the directories
+  - name: Copy consoles Folder
+    ansible.builtin.copy:
+      src: "{{ unziped_prometheus_binary.dest }}/prometheus-{{ prometheus_version }}.{{ ansible_system | lower }}-amd64/consoles"
+      remote_src: 'yes'
+      dest: /etc/prometheus
+      owner: {{ prometheus_user }}
+      group: {{ prometheus_user }}
+
+  - name: Copy console_libraries Folder
+    ansible.builtin.copy:
+      src: "{{ unziped_prometheus_binary.dest }}/prometheus-{{ prometheus_version }}.{{ ansible_system | lower }}-amd64/console_libraries"
+      dest: /etc/prometheus
+      remote_src: 'yes'
+      owner: {{ prometheus_user }}
+      group: {{ prometheus_user }}
+
+#Copy the config file for prometheus
+  - name: Copy prometheus.yml onto the server
+    ansible.builtin.copy:
+      src: ../files/prometheus.yml
+      dest: /etc/prometheus/prometheus.yml
+      owner: {{ prometheus_user }}
+      group: {{ prometheus_user }}
+      mode: '0644'
+    notify: Reload and enable the service
+
+  - name: Copy prometheus.service onto the server
+    ansible.builtin.copy:
+      src: ../files/prometheus.service
+      dest: /etc/systemd/system/prometheus.service
+      owner: root
+      group: root
+      mode: '0644'
+    notify: Reload and enable the service
+
+  - name: Install pip
+    apt:
+      name: pip
+      state: present
+      update_cache: true
+    delegate_to: localhost
+    when: ansible_distribution == 'Ubuntu'
+
+#if this fails you need to install bcrypt on the machine running anisble. 
+  - name: install python libaries on localhost to enc password
+    pip:
+      name: 
+      - bcrypt
+      - passlib
+    delegate_to: localhost
+
+  - name: Copy web.yml for ssl and basic auth
+    ansible.builtin.template:
+      src: web.yml.j2
+      dest: /etc/prometheus/web.yml
+      owner: {{ prometheus_user }}
+      group: {{ prometheus_user }}
+      mode: '0644'
+    notify: Reload and enable the service
+
+  - name: Copy systemd.yml for monitoring rule
+    ansible.builtin.template:
+      src: systemd.yml.j2
+      dest: /etc/prometheus/systemd.yml
+      owner: {{ prometheus_user }}
+      group: {{ prometheus_user }}
+      mode: '0644'
+    notify: Reload and enable the service
+    when: systemd_service != " "
+
+
+#Setup SSL for prometheus
+  - name: Create /etc/prometheus/ssl if it does not exist
+    ansible.builtin.file:
+      path: /etc/prometheus/ssl
+      state: directory
+      owner: {{ prometheus_user }}
+      group: {{ prometheus_user }}
+      mode: '0755'
+
+  - name: Generate an OpenSSL private key with the default values (4096 bits, RSA)
+    community.crypto.openssl_privatekey:
+      path: /etc/prometheus/ssl/key.pem
+      owner: {{ prometheus_user }}
+      group: {{ prometheus_user }}
+    register: openssl_key
+
+  - name: Generate an OpenSSL Certificate Signing Request
+    community.crypto.openssl_csr:
+      path: /tmp/prometheus.csr
+      privatekey_path: "{{ openssl_key.filename }}"
+      organization_name: Internet Widgits Pty Ltd
+      state_or_province_name: Some-State
+      country_name: AU
+    register: openssl_csr
+
+  - name: Generate a Self Signed OpenSSL certificate
+    community.crypto.x509_certificate:
+      path: /etc/prometheus/ssl/cert.crt
+      privatekey_path: "{{ openssl_key.filename }}"
+      csr_path: "{{ openssl_csr.filename }}"
+      provider: selfsigned
+      owner: {{ prometheus_user }}
+      group: {{ prometheus_user }}
+      selfsigned_not_after: '+36500d'
+    notify: Reload and enable the service
+
+  - name: cleanup /tmp/prometheus.tar.gz
+    ansible.builtin.file:
+      state: absent
+      path: "{{ ziped_prometheus_binary.dest }}"
